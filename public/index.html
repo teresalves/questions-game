@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Most Likely To...</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- HOME SCREEN -->
+    <div id="screen-home" class="screen active">
+      <div class="card">
+        <h1>Most Likely To&hellip;</h1>
+        <p class="subtitle">The party game where you vote on who's most likely to do ridiculous things</p>
+
+        <div class="section">
+          <h2>Create a Game</h2>
+          <input type="text" id="host-name" placeholder="Your name" maxlength="20" autocomplete="off">
+          <button id="btn-create" class="btn btn-primary">Create Room</button>
+        </div>
+
+        <div class="divider"><span>or</span></div>
+
+        <div class="section">
+          <h2>Join a Game</h2>
+          <input type="text" id="join-name" placeholder="Your name" maxlength="20" autocomplete="off">
+          <input type="text" id="join-code" placeholder="Room code (e.g. AB3K9)" maxlength="5" autocomplete="off" style="text-transform: uppercase;">
+          <button id="btn-join" class="btn btn-secondary">Join Room</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOBBY SCREEN -->
+    <div id="screen-lobby" class="screen">
+      <div class="card">
+        <h1>Waiting Room</h1>
+        <div class="room-code-display">
+          <span class="label">Room Code</span>
+          <span id="lobby-code" class="code"></span>
+          <button id="btn-copy" class="btn-small" title="Copy room link">Copy Link</button>
+        </div>
+        <div id="player-list" class="player-list"></div>
+        <p id="lobby-status" class="status-text">Waiting for players...</p>
+
+        <!-- Host settings (only visible to host) -->
+        <div id="host-settings" class="settings-panel" style="display:none;">
+          <h2>Game Settings</h2>
+
+          <div class="setting-row">
+            <label for="setting-questions">Questions</label>
+            <div class="setting-control">
+              <button class="btn-stepper" data-target="setting-questions" data-delta="-1">-</button>
+              <span id="setting-questions" class="setting-value">5</span>
+              <button class="btn-stepper" data-target="setting-questions" data-delta="1">+</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label for="setting-timeout">Timer (seconds)</label>
+            <div class="setting-control">
+              <button class="btn-stepper" data-target="setting-timeout" data-delta="-5">-</button>
+              <span id="setting-timeout" class="setting-value">20</span>
+              <button class="btn-stepper" data-target="setting-timeout" data-delta="5">+</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label>Question Packs</label>
+            <div id="pack-options" class="pack-options"></div>
+          </div>
+        </div>
+
+        <button id="btn-start" class="btn btn-primary" style="display:none;">Start Game</button>
+      </div>
+    </div>
+
+    <!-- QUESTION SCREEN -->
+    <div id="screen-question" class="screen">
+      <div class="card">
+        <div class="question-header">
+          <span id="q-number" class="q-number"></span>
+          <div id="timer" class="timer"></div>
+        </div>
+        <h2 id="question-text" class="question-text"></h2>
+        <div id="vote-options" class="vote-options"></div>
+        <div id="vote-status" class="vote-status"></div>
+      </div>
+    </div>
+
+    <!-- RESULTS SCREEN -->
+    <div id="screen-results" class="screen">
+      <div class="card">
+        <h2 id="results-question" class="question-text"></h2>
+        <div id="results-chart" class="results-chart"></div>
+        <button id="btn-next" class="btn btn-primary" style="display:none;">Next Question</button>
+        <p id="waiting-next" class="status-text" style="display:none;">Waiting for host...</p>
+      </div>
+    </div>
+
+    <!-- FINAL SCREEN -->
+    <div id="screen-final" class="screen">
+      <div class="card">
+        <h1>Final Scores</h1>
+        <p class="subtitle">Total votes received across all rounds</p>
+        <div id="final-scores" class="results-chart"></div>
+        <button id="btn-play-again" class="btn btn-primary" style="display:none;">Play Again</button>
+        <p id="waiting-play-again" class="status-text" style="display:none;">Waiting for host to start a new game...</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
