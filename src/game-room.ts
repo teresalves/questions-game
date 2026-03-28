@@ -2,9 +2,13 @@ import { getQuestions } from "./questions";
 
 interface Player {
   name: string;
-  ws: WebSocket;
+  ws: WebSocket | null;
   isHost: boolean;
+  connected: boolean;
+  disconnectTimer: ReturnType<typeof setTimeout> | null;
 }
+
+const REJOIN_GRACE_MS = 30_000; // 30 seconds to reconnect
 
 interface GameSettings {
   numQuestions: number;
@@ -20,6 +24,7 @@ interface GameState {
   votes: Map<string, string>;
   scores: Map<string, number>;
   timer: number | null;
+  questionStartedAt: number | null;
   roomCode: string;
   settings: GameSettings;
 }
@@ -44,6 +49,7 @@ export class GameRoom implements DurableObject {
       votes: new Map(),
       scores: new Map(),
       timer: null,
+      questionStartedAt: null,
       roomCode: "",
       settings: { ...DEFAULT_SETTINGS },
     };
@@ -116,6 +122,12 @@ export class GameRoom implements DurableObject {
       case "play-again":
         this.handlePlayAgain(ws);
         break;
+      case "rejoin":
+        this.handleRejoin(ws, data);
+        break;
+      case "reaction":
+        this.handleReaction(ws, data);
+        break;
       default:
         ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
     }
@@ -145,6 +157,8 @@ export class GameRoom implements DurableObject {
       name: data.name,
       ws,
       isHost,
+      connected: true,
+      disconnectTimer: null,
     });
 
     ws.send(
@@ -159,6 +173,142 @@ export class GameRoom implements DurableObject {
     this.broadcastLobby();
   }
 
+  private handleRejoin(ws: WebSocket, data: { playerId: string; roomCode?: string }) {
+    const player = this.game.players.get(data.playerId);
+    if (!player) {
+      // Player not found — tell client to start fresh
+      ws.send(JSON.stringify({ type: "rejoin-failed", reason: "Player not found" }));
+      return;
+    }
+
+    // Cancel the disconnect grace timer
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+      player.disconnectTimer = null;
+    }
+
+    // Swap in the new WebSocket
+    player.ws = ws;
+    player.connected = true;
+
+    // Send confirmation
+    ws.send(
+      JSON.stringify({
+        type: "rejoined",
+        playerId: data.playerId,
+        isHost: player.isHost,
+        roomCode: this.game.roomCode,
+      })
+    );
+
+    // Send full state sync so the client catches up
+    this.sendStateSync(ws, data.playerId);
+  }
+
+  private static readonly ALLOWED_REACTIONS = new Set([
+    "😂", "🔥", "💀", "👀", "😱", "🤡", "💯", "👏", "😈", "🫣",
+  ]);
+
+  private handleReaction(ws: WebSocket, data: { emoji: string }) {
+    const playerId = this.getPlayerId(ws);
+    if (!playerId) return;
+
+    // Only allow preset reactions
+    if (!GameRoom.ALLOWED_REACTIONS.has(data.emoji)) return;
+
+    const player = this.game.players.get(playerId);
+    if (!player) return;
+
+    this.broadcast({
+      type: "reaction",
+      name: player.name,
+      emoji: data.emoji,
+      fromId: playerId,
+    });
+  }
+
+  private sendStateSync(ws: WebSocket, playerId: string) {
+    const players = this.getPlayerList();
+
+    if (this.game.phase === "lobby") {
+      ws.send(JSON.stringify({
+        type: "lobby",
+        players,
+        roomCode: this.game.roomCode,
+      }));
+      return;
+    }
+
+    if (this.game.phase === "question") {
+      const question = this.game.questions[this.game.currentQuestionIndex];
+      const hasVoted = this.game.votes.has(playerId);
+      const elapsed = this.game.questionStartedAt
+        ? Math.floor((Date.now() - this.game.questionStartedAt) / 1000)
+        : 0;
+      const timeLeft = Math.max(0, this.game.settings.timeout - elapsed);
+      ws.send(JSON.stringify({
+        type: "sync",
+        phase: "question",
+        question: `Who is most likely to ${question}?`,
+        questionNumber: this.game.currentQuestionIndex + 1,
+        totalQuestions: this.game.questions.length,
+        players,
+        hasVoted,
+        votedFor: hasVoted ? this.game.votes.get(playerId) : null,
+        voteCount: this.game.votes.size,
+        totalPlayers: this.game.players.size,
+        timeLeft,
+      }));
+      return;
+    }
+
+    if (this.game.phase === "results") {
+      const voteCounts: Record<string, number> = {};
+      for (const [id] of this.game.players) {
+        voteCounts[id] = 0;
+      }
+      for (const [, votedForId] of this.game.votes) {
+        voteCounts[votedForId] = (voteCounts[votedForId] || 0) + 1;
+      }
+      const results = Object.entries(voteCounts)
+        .map(([id, count]) => ({
+          playerId: id,
+          name: this.game.players.get(id)?.name || "Unknown",
+          votes: count,
+        }))
+        .sort((a, b) => b.votes - a.votes);
+
+      const isLastQuestion =
+        this.game.currentQuestionIndex >= this.game.questions.length - 1;
+
+      ws.send(JSON.stringify({
+        type: "results",
+        question: `Who is most likely to ${this.game.questions[this.game.currentQuestionIndex]}?`,
+        results,
+        questionNumber: this.game.currentQuestionIndex + 1,
+        totalQuestions: this.game.questions.length,
+        isLastQuestion,
+      }));
+      return;
+    }
+
+    if (this.game.phase === "final") {
+      const finalScores = Array.from(this.game.scores.entries())
+        .map(([id, score]) => ({
+          playerId: id,
+          name: this.game.players.get(id)?.name || "Unknown",
+          totalVotes: score,
+        }))
+        .sort((a, b) => b.totalVotes - a.totalVotes);
+
+      ws.send(JSON.stringify({
+        type: "final",
+        scores: finalScores,
+      }));
+      return;
+    }
+  }
+
   private handleStart(ws: WebSocket, data: { settings?: Partial<GameSettings> }) {
     const playerId = this.getPlayerId(ws);
     if (!playerId) return;
@@ -169,8 +319,8 @@ export class GameRoom implements DurableObject {
       return;
     }
 
-    if (this.game.players.size < 2) {
-      ws.send(JSON.stringify({ type: "error", message: "Need at least 2 players" }));
+    if (this.getConnectedPlayerCount() < 2) {
+      ws.send(JSON.stringify({ type: "error", message: "Need at least 2 connected players" }));
       return;
     }
 
@@ -201,6 +351,7 @@ export class GameRoom implements DurableObject {
   private startQuestion() {
     this.game.phase = "question";
     this.game.votes = new Map();
+    this.game.questionStartedAt = Date.now();
 
     const question = this.game.questions[this.game.currentQuestionIndex];
     const players = this.getPlayerList();
@@ -247,11 +398,11 @@ export class GameRoom implements DurableObject {
     this.broadcast({
       type: "voteCount",
       count: this.game.votes.size,
-      total: this.game.players.size,
+      total: this.getConnectedPlayerCount(),
     });
 
-    // Check if everyone has voted
-    if (this.game.votes.size === this.game.players.size) {
+    // Check if everyone connected has voted
+    if (this.game.votes.size >= this.getConnectedPlayerCount()) {
       if (this.game.timer) {
         clearTimeout(this.game.timer);
         this.game.timer = null;
@@ -368,7 +519,37 @@ export class GameRoom implements DurableObject {
     const playerId = this.getPlayerId(ws);
     if (!playerId) return;
 
-    const wasHost = this.game.players.get(playerId)?.isHost;
+    const player = this.game.players.get(playerId);
+    if (!player) return;
+
+    // Mark as disconnected but keep the player data for grace period
+    player.ws = null;
+    player.connected = false;
+
+    // Start a grace period — if they don't rejoin in time, fully remove them
+    player.disconnectTimer = setTimeout(() => {
+      this.fullyRemovePlayer(playerId);
+    }, REJOIN_GRACE_MS);
+
+    // Notify other players
+    this.broadcast({
+      type: "playerDisconnected",
+      playerId,
+      name: player.name,
+    });
+  }
+
+  private fullyRemovePlayer(playerId: string) {
+    const player = this.game.players.get(playerId);
+    if (!player) return;
+
+    // If they reconnected in the meantime, don't remove
+    if (player.connected) return;
+
+    const wasHost = player.isHost;
+    if (player.disconnectTimer) {
+      clearTimeout(player.disconnectTimer);
+    }
     this.game.players.delete(playerId);
 
     // If host left and game is in lobby, assign new host
@@ -376,7 +557,7 @@ export class GameRoom implements DurableObject {
       const firstPlayer = this.game.players.values().next().value;
       if (firstPlayer) {
         firstPlayer.isHost = true;
-        firstPlayer.ws.send(
+        firstPlayer.ws?.send(
           JSON.stringify({ type: "promoted", isHost: true })
         );
       }
@@ -386,9 +567,9 @@ export class GameRoom implements DurableObject {
 
     // If in question phase and everyone remaining has voted, end voting
     if (this.game.phase === "question") {
-      // Remove vote from disconnected player
       this.game.votes.delete(playerId);
-      if (this.game.players.size > 0 && this.game.votes.size >= this.game.players.size) {
+      const connectedCount = this.getConnectedPlayerCount();
+      if (connectedCount > 0 && this.game.votes.size >= connectedCount) {
         if (this.game.timer) {
           clearTimeout(this.game.timer);
           this.game.timer = null;
@@ -396,6 +577,14 @@ export class GameRoom implements DurableObject {
         this.endVoting();
       }
     }
+  }
+
+  private getConnectedPlayerCount(): number {
+    let count = 0;
+    for (const [, player] of this.game.players) {
+      if (player.connected) count++;
+    }
+    return count;
   }
 
   private getPlayerList() {
@@ -417,6 +606,7 @@ export class GameRoom implements DurableObject {
   private broadcast(message: object) {
     const msg = JSON.stringify(message);
     for (const [, player] of this.game.players) {
+      if (!player.ws || !player.connected) continue;
       try {
         player.ws.send(msg);
       } catch {

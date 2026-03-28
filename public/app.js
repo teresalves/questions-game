@@ -21,6 +21,7 @@ const SETTINGS_LIMITS = {
 let ws = null;
 let state = {
   playerId: null,
+  playerName: null,
   isHost: false,
   roomCode: null,
   phase: "home",
@@ -29,6 +30,31 @@ let state = {
   timeLeft: 0,
   settings: { ...DEFAULT_SETTINGS, packs: [...DEFAULT_SETTINGS.packs] },
 };
+
+// --- Session Persistence ---
+function saveSession() {
+  sessionStorage.setItem(
+    "questions-game-session",
+    JSON.stringify({
+      playerId: state.playerId,
+      name: state.playerName,
+      roomCode: state.roomCode,
+    })
+  );
+}
+
+function loadSession() {
+  try {
+    const raw = sessionStorage.getItem("questions-game-session");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearSession() {
+  sessionStorage.removeItem("questions-game-session");
+}
 
 // --- DOM Helpers ---
 const $ = (sel) => document.querySelector(sel);
@@ -48,6 +74,7 @@ function showToast(msg, isError = false) {
 
 // --- WebSocket ---
 function connectToRoom(roomCode, playerName) {
+  state.playerName = playerName;
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${protocol}//${location.host}/ws/${roomCode}`);
 
@@ -73,6 +100,34 @@ function connectToRoom(roomCode, playerName) {
   };
 }
 
+function reconnectToRoom(roomCode, playerId, playerName) {
+  state.playerName = playerName;
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${protocol}//${location.host}/ws/${roomCode}`);
+
+  ws.onopen = () => {
+    ws.send(
+      JSON.stringify({ type: "rejoin", playerId: playerId, roomCode: roomCode })
+    );
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    handleServerMessage(data);
+  };
+
+  ws.onerror = () => {
+    showToast("Connection error", true);
+    clearSession();
+  };
+
+  ws.onclose = () => {
+    if (state.phase !== "home" && state.phase !== "final") {
+      showToast("Disconnected from server", true);
+    }
+  };
+}
+
 function send(data) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(data));
@@ -86,9 +141,33 @@ function handleServerMessage(data) {
       state.playerId = data.playerId;
       state.isHost = data.isHost;
       state.roomCode = data.roomCode;
+      saveSession();
       history.replaceState(null, "", `?room=${data.roomCode}`);
       showScreen("lobby");
       renderLobbyCode();
+      break;
+
+    case "rejoined":
+      state.playerId = data.playerId;
+      state.isHost = data.isHost;
+      state.roomCode = data.roomCode;
+      saveSession();
+      history.replaceState(null, "", `?room=${data.roomCode}`);
+      // State sync message will follow and set the correct screen
+      break;
+
+    case "rejoin-failed":
+      clearSession();
+      showToast("Session expired, please rejoin", true);
+      showScreen("home");
+      break;
+
+    case "sync":
+      handleSync(data);
+      break;
+
+    case "playerDisconnected":
+      showToast(`${data.name} disconnected...`, false);
       break;
 
     case "promoted":
@@ -99,6 +178,7 @@ function handleServerMessage(data) {
 
     case "lobby":
       state.phase = "lobby";
+      updateReactionBar();
       renderLobby(data);
       // Only switch to lobby screen if we've already joined
       // (avoids interfering with the home screen)
@@ -110,6 +190,7 @@ function handleServerMessage(data) {
     case "question":
       state.phase = "question";
       state.hasVoted = false;
+      updateReactionBar();
       renderQuestion(data);
       startTimer(data.timeLimit);
       showScreen("question");
@@ -126,6 +207,7 @@ function handleServerMessage(data) {
 
     case "results":
       state.phase = "results";
+      updateReactionBar();
       stopTimer();
       renderResults(data);
       showScreen("results");
@@ -133,15 +215,46 @@ function handleServerMessage(data) {
 
     case "final":
       state.phase = "final";
+      updateReactionBar();
       stopTimer();
       renderFinal(data);
       showScreen("final");
+      break;
+
+    case "reaction":
+      showReaction(data.name, data.emoji, data.fromId);
       break;
 
     case "error":
       showToast(data.message, true);
       break;
   }
+}
+
+// --- State Sync (for rejoin) ---
+function handleSync(data) {
+  if (data.phase === "question") {
+    state.phase = "question";
+    state.hasVoted = data.hasVoted;
+    updateReactionBar();
+    renderQuestion({
+      questionNumber: data.questionNumber,
+      totalQuestions: data.totalQuestions,
+      question: data.question,
+      players: data.players,
+      timeLimit: data.timeLeft,
+    });
+    if (data.timeLeft > 0) {
+      startTimer(data.timeLeft);
+    }
+    if (data.hasVoted) {
+      highlightVote(data.votedFor);
+    }
+    renderVoteStatus({ count: data.voteCount, total: data.totalPlayers });
+    showScreen("question");
+  }
+  // results and final are handled by the normal message handlers
+  // since sendStateSync sends those as standard messages
 }
 
 // --- Renderers ---
@@ -351,6 +464,35 @@ function renderFinal(data) {
   }
 }
 
+// --- Reactions ---
+function showReaction(name, emoji, fromId) {
+  const container = $("#reaction-container");
+  const popup = document.createElement("div");
+  popup.className = "reaction-popup";
+  // Show name only for other players
+  const label = fromId === state.playerId ? "You" : name;
+  popup.innerHTML = `<span class="reaction-emoji">${emoji}</span><span class="reaction-name">${label}</span>`;
+
+  // Random horizontal position
+  popup.style.left = Math.random() * 70 + 10 + "%";
+
+  container.appendChild(popup);
+
+  // Trigger animation
+  requestAnimationFrame(() => popup.classList.add("show"));
+
+  setTimeout(() => {
+    popup.classList.add("fade-out");
+    setTimeout(() => popup.remove(), 400);
+  }, 2000);
+}
+
+function updateReactionBar() {
+  const bar = $("#reaction-bar");
+  const gamePhases = ["question", "results", "final"];
+  bar.classList.toggle("visible", gamePhases.includes(state.phase));
+}
+
 // --- Timer ---
 function startTimer(seconds) {
   stopTimer();
@@ -460,13 +602,32 @@ $("#btn-play-again").addEventListener("click", () => {
   send({ type: "play-again" });
 });
 
-// --- Auto-fill room code from URL ---
-(function checkUrlForRoom() {
+// --- Reaction buttons ---
+document.querySelectorAll(".reaction-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    send({ type: "reaction", emoji: btn.dataset.emoji });
+    // Brief press animation
+    btn.classList.add("pressed");
+    setTimeout(() => btn.classList.remove("pressed"), 200);
+  });
+});
+
+// --- Auto-reconnect or auto-fill room code from URL ---
+(function init() {
+  const session = loadSession();
   const params = new URLSearchParams(location.search);
-  const room = params.get("room");
-  if (room) {
-    $("#join-code").value = room.toUpperCase();
-    // Scroll to join section
+  const roomFromUrl = params.get("room");
+
+  // If we have a saved session, try to rejoin
+  if (session && session.playerId && session.roomCode) {
+    showToast("Reconnecting...");
+    reconnectToRoom(session.roomCode, session.playerId, session.name);
+    return;
+  }
+
+  // Otherwise, auto-fill room code from URL
+  if (roomFromUrl) {
+    $("#join-code").value = roomFromUrl.toUpperCase();
     $("#join-name").focus();
   }
 })();

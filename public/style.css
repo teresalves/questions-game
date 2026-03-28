@@ -541,7 +541,7 @@ input[type="text"]::placeholder {
 /* Toast notifications */
 .toast {
   position: fixed;
-  bottom: 24px;
+  bottom: 80px;
   left: 50%;
   transform: translateX(-50%) translateY(100px);
   background: var(--surface-2);
@@ -562,4 +562,96 @@ input[type="text"]::placeholder {
 .toast.error {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* Reaction bar */
+.reaction-bar {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%) translateY(100%);
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 50;
+  transition: transform 0.3s ease;
+}
+
+.reaction-bar.visible {
+  transform: translateX(-50%) translateY(0);
+}
+
+.reaction-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 1.3rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reaction-btn:hover {
+  background: rgba(255, 137, 6, 0.15);
+  transform: scale(1.15);
+}
+
+.reaction-btn:active,
+.reaction-btn.pressed {
+  transform: scale(0.9);
+}
+
+/* Reaction popups */
+.reaction-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 200;
+  overflow: hidden;
+}
+
+.reaction-popup {
+  position: absolute;
+  bottom: 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transform: translateY(20px) scale(0.5);
+  transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reaction-popup.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.reaction-popup.fade-out {
+  opacity: 0;
+  transform: translateY(-40px) scale(0.8);
+  transition: all 0.4s ease;
+}
+
+.reaction-emoji {
+  font-size: 2.4rem;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+}
+
+.reaction-name {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
