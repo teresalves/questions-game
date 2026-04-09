@@ -65,11 +65,16 @@ function showScreen(id) {
   $(`#screen-${id}`).classList.add("active");
 }
 
+let _toastTimer = null;
 function showToast(msg, isError = false) {
   const toast = $("#toast");
+  if (_toastTimer) clearTimeout(_toastTimer);
   toast.textContent = msg;
   toast.className = "toast show" + (isError ? " error" : "");
-  setTimeout(() => (toast.className = "toast"), 2500);
+  _toastTimer = setTimeout(() => {
+    toast.className = "toast";
+    _toastTimer = null;
+  }, 2500);
 }
 
 // --- WebSocket ---
@@ -614,22 +619,28 @@ document.querySelectorAll(".reaction-btn").forEach((btn) => {
 
 // --- Auto-reconnect or auto-fill room code from URL ---
 (function init() {
-  const session = loadSession();
   const params = new URLSearchParams(location.search);
   const roomFromUrl = params.get("room");
 
-  // If we have a saved session, try to rejoin
-  if (session && session.playerId && session.roomCode) {
-    showToast("Reconnecting...");
-    reconnectToRoom(session.roomCode, session.playerId, session.name);
+  // No room param → always go to home screen
+  if (!roomFromUrl) {
+    clearSession();
     return;
   }
 
-  // Otherwise, auto-fill room code from URL
-  if (roomFromUrl) {
-    $("#join-code").value = roomFromUrl.toUpperCase();
-    $("#join-name").focus();
+  const room = roomFromUrl.toUpperCase();
+  const session = loadSession();
+
+  // If we have a session matching this room, try to rejoin as the same player
+  if (session && session.playerId && session.roomCode === room) {
+    showToast("Reconnecting...");
+    reconnectToRoom(room, session.playerId, session.name);
+    return;
   }
+
+  // Otherwise, just pre-fill the join form
+  $("#join-code").value = room;
+  $("#join-name").focus();
 })();
 
 // --- Enter key support ---
